@@ -73,6 +73,7 @@
       <div class="controls">
         <button id="startButton" type="button">カメラ開始</button>
         <div class="status">状態: <span id="status">未許可</span></div>
+        <div class="status">モデル: <span id="modelStatus">読み込み中</span></div>
       </div>
       <div class="stage">
         <video id="video" playsinline muted></video>
@@ -80,15 +81,27 @@
       </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.16.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
     <script>
       const startButton = document.getElementById("startButton");
       const statusText = document.getElementById("status");
+      const modelStatusText = document.getElementById("modelStatus");
       const video = document.getElementById("video");
       const overlay = document.getElementById("overlay");
       let activeStream = null;
+      let model = null;
+      let modelReady = false;
+      let shouldRunInference = false;
+      let inferenceTimer = null;
+      let currentConfig = null;
 
       const setStatus = (value) => {
         statusText.textContent = value;
+      };
+
+      const setModelStatus = (value) => {
+        modelStatusText.textContent = value;
       };
 
       const setButtonLabel = (isRunning) => {
@@ -127,6 +140,85 @@
         ctx.clearRect(0, 0, overlay.width, overlay.height);
       };
 
+      const getInferenceOptions = () => {
+        const inference = (currentConfig && currentConfig.inference) || {};
+        const ui = (currentConfig && currentConfig.ui) || {};
+        return {
+          intervalMs: inference.intervalMs ?? 250,
+          scoreThreshold: inference.scoreThreshold ?? 0.6,
+          targetClass: inference.targetClass || "bottle",
+          showScore: ui.showScore === true,
+          showCount: ui.showCount === true,
+          showBoxes: ui.showBoxes !== false,
+        };
+      };
+
+      const drawDetections = (detections, options) => {
+        const ctx = overlay.getContext("2d");
+        clearOverlay();
+        ctx.lineWidth = 2;
+        ctx.font = "14px sans-serif";
+        ctx.textBaseline = "top";
+        ctx.strokeStyle = "#00e5ff";
+        ctx.fillStyle = "#00e5ff";
+
+        if (options.showBoxes) {
+          detections.forEach((detection) => {
+            const [x, y, width, height] = detection.bbox;
+            ctx.strokeRect(x, y, width, height);
+            if (options.showScore) {
+              const label = `${Math.round(detection.score * 100)}%`;
+              ctx.fillText(label, x, Math.max(0, y - 18));
+            }
+          });
+        }
+
+        if (options.showCount) {
+          ctx.fillText(`${options.targetClass}: ${detections.length}`, 12, 12);
+        }
+      };
+
+      const stopInference = () => {
+        shouldRunInference = false;
+        if (inferenceTimer) {
+          clearTimeout(inferenceTimer);
+          inferenceTimer = null;
+        }
+      };
+
+      const startInference = () => {
+        if (!modelReady || !activeStream) {
+          shouldRunInference = true;
+          return;
+        }
+        if (inferenceTimer) {
+          return;
+        }
+        shouldRunInference = true;
+        const run = async () => {
+          if (!shouldRunInference || !modelReady || !activeStream) {
+            inferenceTimer = null;
+            return;
+          }
+          updateOverlaySize();
+          const options = getInferenceOptions();
+          let predictions = [];
+          try {
+            predictions = await model.detect(video);
+          } catch (error) {
+            predictions = [];
+          }
+          const detections = predictions.filter(
+            (prediction) =>
+              prediction.class === options.targetClass &&
+              prediction.score >= options.scoreThreshold
+          );
+          drawDetections(detections, options);
+          inferenceTimer = setTimeout(run, options.intervalMs);
+        };
+        run();
+      };
+
       const getStream = async (cameraConfig) => {
         const preferredConstraints = {
           audio: false,
@@ -159,6 +251,7 @@
           activeStream.getTracks().forEach((track) => track.stop());
           activeStream = null;
         }
+        stopInference();
         video.srcObject = null;
         clearOverlay();
         setStatus("停止中");
@@ -171,11 +264,13 @@
 
         try {
           const config = await loadConfig();
+          currentConfig = config;
           const stream = await getStream(config.camera || {});
           applyStream(stream);
           await video.play();
           updateOverlaySize();
           setButtonLabel(true);
+          startInference();
         } catch (error) {
           if (error && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
             setStatus("未許可");
@@ -198,6 +293,23 @@
 
       video.addEventListener("loadedmetadata", updateOverlaySize);
       window.addEventListener("resize", updateOverlaySize);
+
+      const loadModel = async () => {
+        setModelStatus("読み込み中");
+        try {
+          model = await cocoSsd.load();
+          modelReady = true;
+          setModelStatus("準備OK");
+          if (shouldRunInference) {
+            startInference();
+          }
+        } catch (error) {
+          modelReady = false;
+          setModelStatus("失敗");
+        }
+      };
+
+      loadModel();
     </script>
   </body>
 </html>
