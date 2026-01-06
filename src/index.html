@@ -91,6 +91,10 @@
         statusText.textContent = value;
       };
 
+      const setButtonLabel = (isRunning) => {
+        startButton.textContent = isRunning ? "カメラ終了" : "カメラ開始";
+      };
+
       const loadConfig = async () => {
         const response = await fetch("../config/app.config.json", {
           cache: "no-store",
@@ -116,6 +120,11 @@
         }
         overlay.width = videoWidth;
         overlay.height = videoHeight;
+      };
+
+      const clearOverlay = () => {
+        const ctx = overlay.getContext("2d");
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
       };
 
       const getStream = async (cameraConfig) => {
@@ -145,7 +154,18 @@
         }
       };
 
-      startButton.addEventListener("click", async () => {
+      const stopCamera = () => {
+        if (activeStream) {
+          activeStream.getTracks().forEach((track) => track.stop());
+          activeStream = null;
+        }
+        video.srcObject = null;
+        clearOverlay();
+        setStatus("停止中");
+        setButtonLabel(false);
+      };
+
+      const startCamera = async () => {
         startButton.disabled = true;
         setStatus("起動中");
 
@@ -155,15 +175,25 @@
           applyStream(stream);
           await video.play();
           updateOverlaySize();
+          setButtonLabel(true);
         } catch (error) {
           if (error && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
             setStatus("未許可");
           } else {
             setStatus("失敗");
           }
+          setButtonLabel(false);
         } finally {
           startButton.disabled = false;
         }
+      };
+
+      startButton.addEventListener("click", async () => {
+        if (activeStream) {
+          stopCamera();
+          return;
+        }
+        await startCamera();
       });
 
       video.addEventListener("loadedmetadata", updateOverlaySize);
