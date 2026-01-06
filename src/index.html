@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ペットボトル認識Webアプリ</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
+        background: #f3f3f3;
+        color: #1a1a1a;
+      }
+      .app {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 24px 16px 32px;
+      }
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+      .status {
+        padding: 6px 12px;
+        background: #fff;
+        border-radius: 999px;
+        border: 1px solid #d0d0d0;
+        font-size: 14px;
+      }
+      button {
+        padding: 10px 16px;
+        font-size: 16px;
+        border-radius: 8px;
+        border: none;
+        background: #111;
+        color: #fff;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .stage {
+        position: relative;
+        width: 100%;
+        max-width: 960px;
+        margin: 0 auto;
+        background: #000;
+        border-radius: 12px;
+        overflow: hidden;
+        aspect-ratio: 4 / 3;
+      }
+      video,
+      canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      video {
+        object-fit: cover;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <h1>ペットボトル認識Webアプリ</h1>
+      <div class="controls">
+        <button id="startButton" type="button">カメラ開始</button>
+        <div class="status">状態: <span id="status">未許可</span></div>
+      </div>
+      <div class="stage">
+        <video id="video" playsinline muted></video>
+        <canvas id="overlay"></canvas>
+      </div>
+    </div>
+
+    <script>
+      const startButton = document.getElementById("startButton");
+      const statusText = document.getElementById("status");
+      const video = document.getElementById("video");
+      const overlay = document.getElementById("overlay");
+      let activeStream = null;
+
+      const setStatus = (value) => {
+        statusText.textContent = value;
+      };
+
+      const loadConfig = async () => {
+        const response = await fetch("../config/app.config.json", {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          throw new Error("config load failed");
+        }
+        return response.json();
+      };
+
+      const applyStream = (stream) => {
+        if (activeStream) {
+          activeStream.getTracks().forEach((track) => track.stop());
+        }
+        activeStream = stream;
+        video.srcObject = stream;
+      };
+
+      const updateOverlaySize = () => {
+        const { videoWidth, videoHeight } = video;
+        if (!videoWidth || !videoHeight) {
+          return;
+        }
+        overlay.width = videoWidth;
+        overlay.height = videoHeight;
+      };
+
+      const getStream = async (cameraConfig) => {
+        const preferredConstraints = {
+          audio: false,
+          video: {
+            width: cameraConfig.width,
+            height: cameraConfig.height,
+            facingMode: { ideal: cameraConfig.facingMode || "environment" },
+          },
+        };
+        const fallbackConstraints = {
+          audio: false,
+          video: {
+            width: cameraConfig.width,
+            height: cameraConfig.height,
+          },
+        };
+
+        try {
+          return await navigator.mediaDevices.getUserMedia(preferredConstraints);
+        } catch (error) {
+          if (error && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
+            throw error;
+          }
+          return navigator.mediaDevices.getUserMedia(fallbackConstraints);
+        }
+      };
+
+      startButton.addEventListener("click", async () => {
+        startButton.disabled = true;
+        setStatus("起動中");
+
+        try {
+          const config = await loadConfig();
+          const stream = await getStream(config.camera || {});
+          applyStream(stream);
+          await video.play();
+          updateOverlaySize();
+        } catch (error) {
+          if (error && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
+            setStatus("未許可");
+          } else {
+            setStatus("失敗");
+          }
+        } finally {
+          startButton.disabled = false;
+        }
+      });
+
+      video.addEventListener("loadedmetadata", updateOverlaySize);
+      window.addEventListener("resize", updateOverlaySize);
+    </script>
+  </body>
+</html>
